@@ -1,1 +1,4 @@
 ~$*.ppt*
+.lock.*.pptx
+.~lock.*.pptx
+~.lock.*
