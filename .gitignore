@@ -1,1 +1,12 @@
-~$*.ppt*
+*.swp
+*tmp
+
+# Power Point Temporary Files
+~$*
+~*.ppt*
+
+# LibreOffice Lock Files
+.~lock.*.ppt*
+
+
+
