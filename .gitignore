@@ -8,5 +8,6 @@
 # LibreOffice Lock Files
 .~lock.*.ppt*
 
-
+# Cursor/VSCode Code Runner temporary files
+tempCodeRunnerFile.*
 
