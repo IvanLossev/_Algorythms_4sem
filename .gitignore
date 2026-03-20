@@ -11,3 +11,6 @@
 # Cursor/VSCode Code Runner temporary files
 tempCodeRunnerFile.*
 
+__pycache__/
+*.pyc
+*.pyo
