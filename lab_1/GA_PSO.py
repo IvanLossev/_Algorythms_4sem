@@ -46,6 +46,10 @@ KNOWN_MINIMA = [
 
 
 class GeneticAlgorithmReal:
+    """
+    use_modifications=True: элиты + дети с арифметическим кроссовером.
+    use_modifications=False: только дети от простого кроссовера лучших.
+    """
 
     def __init__(
         self,
@@ -76,11 +80,16 @@ class GeneticAlgorithmReal:
         x1, y1 = parent1
         x2, y2 = parent2
         if self.use_modifications:
+            # С модификацией: арифметический кроссовер
             alpha = random.choice([0.3, 0.4, 0.5])
             c1 = [alpha * x1 + (1 - alpha) * x2, alpha * y1 + (1 - alpha) * y2]
             c2 = [alpha * x2 + (1 - alpha) * x1, alpha * y2 + (1 - alpha) * y1]
             return c1, c2
-        return [x1, y1], [x2, y2]
+        else:
+            # Без модификации: простой кроссовер 50/50 (среднее)
+            c1 = [(x1 + x2) / 2, (y1 + y2) / 2]
+            c2 = [(x1 + x2) / 2, (y1 + y2) / 2]  # Или можно сделать разные, но для простоты одинаковые
+            return c1, c2
 
     def mutate(self, individual: list[float]) -> list[float]:
         """Мутация: с вероятностью mutation_rate изменяем координаты"""
@@ -119,23 +128,40 @@ class GeneticAlgorithmReal:
 
             elite_size = int(self.pop_size * self.remains)
             elites = sorted_pop[:elite_size]
-            parents = sorted_pop[:elite_size]
+            parents = sorted_pop[:elite_size]  # Лучшие для кроссовера
             random.shuffle(parents)
 
             children: list[list[float]] = []
-            for i in range(0, len(parents) - 1, 2):
-                if len(children) < self.pop_size - elite_size:
-                    c1, c2 = self.crossover(parents[i], parents[i + 1])
-                    c1 = self.mutate(c1)
-                    c2 = self.mutate(c2)
-                    children.append(c1)
-                if len(children) < self.pop_size - elite_size:
-                    children.append(c2)
+            if self.use_modifications:
+                # С модификацией: элиты + дети
+                for i in range(0, len(parents) - 1, 2):
+                    if len(children) < self.pop_size - elite_size:
+                        c1, c2 = self.crossover(parents[i], parents[i + 1])
+                        c1 = self.mutate(c1)
+                        c2 = self.mutate(c2)
+                        children.append(c1)
+                    if len(children) < self.pop_size - elite_size:
+                        children.append(c2)
 
-            while len(children) < self.pop_size - elite_size:
-                children.append([random.uniform(lo, hi), random.uniform(lo, hi)])
+                while len(children) < self.pop_size - elite_size:
+                    children.append([random.uniform(lo, hi), random.uniform(lo, hi)])
 
-            population = elites + children
+                population = elites + children
+            else:
+                # Без модификации: только дети от кроссовера лучших
+                for i in range(0, len(parents) - 1, 2):
+                    if len(children) < self.pop_size:
+                        c1, c2 = self.crossover(parents[i], parents[i + 1])
+                        c1 = self.mutate(c1)
+                        c2 = self.mutate(c2)
+                        children.append(c1)
+                        if len(children) < self.pop_size:
+                            children.append(c2)
+
+                while len(children) < self.pop_size:
+                    children.append([random.uniform(lo, hi), random.uniform(lo, hi)])
+
+                population = children
 
             if (gen + 1) % 20 == 0:
                 print(
@@ -146,7 +172,11 @@ class GeneticAlgorithmReal:
 
 
 class GeneticAlgorithmBinary:
-    # Хромосома: 2 * bits_per_var бит (x, затем y)
+    """
+    Хромосома: 2 * bits_per_var бит (x, затем y).
+    use_modifications=True: элиты + дети без кроссовера (копии).
+    use_modifications=False: только дети от одноточечного кроссовера лучших.
+    """
 
     def __init__(
         self,
@@ -203,14 +233,17 @@ class GeneticAlgorithmBinary:
     def crossover(
         self, p1: list[int], p2: list[int]
     ) -> tuple[list[int], list[int]]:
-        if not self.use_modifications:
+        if self.use_modifications:
+            # С модификацией: копии (без кроссовера)
             return p1[:], p2[:]
-        if self.chromo_len < 2:
-            return p1[:], p2[:]
-        pt = random.randint(1, self.chromo_len - 1)
-        c1 = p1[:pt] + p2[pt:]
-        c2 = p2[:pt] + p1[pt:]
-        return c1, c2
+        else:
+            # Без модификации: одноточечный кроссовер
+            if self.chromo_len < 2:
+                return p1[:], p2[:]
+            pt = random.randint(1, self.chromo_len - 1)
+            c1 = p1[:pt] + p2[pt:]
+            c2 = p2[:pt] + p1[pt:]
+            return c1, c2
 
     def run(self) -> tuple[list[float] | None, float, list[float], int]:
         population = self.init_population()
@@ -237,25 +270,44 @@ class GeneticAlgorithmBinary:
 
             elite_size = int(self.pop_size * self.remains)
             elites = [c[:] for c in sorted_pop[:elite_size]]
-            parents = [c[:] for c in sorted_pop[:elite_size]]
+            parents = [c[:] for c in sorted_pop[:elite_size]]  # Лучшие для кроссовера
             random.shuffle(parents)
 
             children: list[list[int]] = []
-            for i in range(0, len(parents) - 1, 2):
-                if len(children) < self.pop_size - elite_size:
-                    c1, c2 = self.crossover(parents[i], parents[i + 1])
-                    self.mutate(c1)
-                    self.mutate(c2)
-                    children.append(c1)
-                if len(children) < self.pop_size - elite_size:
-                    children.append(c2)
+            if self.use_modifications:
+                # С модификацией: элиты + дети
+                for i in range(0, len(parents) - 1, 2):
+                    if len(children) < self.pop_size - elite_size:
+                        c1, c2 = self.crossover(parents[i], parents[i + 1])
+                        self.mutate(c1)
+                        self.mutate(c2)
+                        children.append(c1)
+                    if len(children) < self.pop_size - elite_size:
+                        children.append(c2)
 
-            while len(children) < self.pop_size - elite_size:
-                ch = self.random_chromosome()
-                self.mutate(ch)
-                children.append(ch)
+                while len(children) < self.pop_size - elite_size:
+                    ch = self.random_chromosome()
+                    self.mutate(ch)
+                    children.append(ch)
 
-            population = elites + children
+                population = elites + children
+            else:
+                # Без модификации: только дети от кроссовера лучших
+                for i in range(0, len(parents) - 1, 2):
+                    if len(children) < self.pop_size:
+                        c1, c2 = self.crossover(parents[i], parents[i + 1])
+                        self.mutate(c1)
+                        self.mutate(c2)
+                        children.append(c1)
+                        if len(children) < self.pop_size:
+                            children.append(c2)
+
+                while len(children) < self.pop_size:
+                    ch = self.random_chromosome()
+                    self.mutate(ch)
+                    children.append(ch)
+
+                population = children
 
             if (gen + 1) % 20 == 0:
                 print(f"Поколение {gen+1}: лучший f = {best_f:.6f} в ({bx:.5f}, {by:.5f})")
