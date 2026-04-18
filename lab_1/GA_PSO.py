@@ -1,13 +1,3 @@
-"""
-Лабораторная: вариант 9 (функция f(x,y)), ГА с модификацией «кроссовер»,
-РА с модификацией «ограничение скорости».
-
-Один файл, несколько классов. Модификации включаются полем use_modifications
-(ветвление внутри методов), а не отдельным классом и не дублированием run().
-"""
-
-from __future__ import annotations
-
 import math
 import random
 import threading
@@ -27,14 +17,7 @@ from matplotlib.figure import Figure
 
 
 def function_var9(x: float, y: float) -> float:
-    return -0.0001 * (
-        abs(
-            math.sin(x)
-            * math.sin(y)
-            * math.exp(abs(100 - (math.sqrt(x**2 + y**2) / math.pi)))
-        )
-        + 1
-    ) ** 0.1
+    return -0.0001 * (abs(math.sin(x) * math.sin(y) * math.exp(abs(100 - (math.sqrt(x**2 + y**2) / math.pi)))) + 1) ** 0.1
 
 
 KNOWN_MINIMA = [
