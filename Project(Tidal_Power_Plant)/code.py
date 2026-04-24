@@ -4,276 +4,325 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-
-# Константы
+'''
+Константы
+'''
 RHO = 1000.0          # плотность воды, кг/м^3
 G = 9.81              # ускорение свободного падения, м/с^2
 
+'''
+Функции расчета
+
+    Используется аналитическая модель (Garrett & Cummins) для поршневого режима залива.
+
+    Основные формулы (из презентации, слайд "Определение мощности ПЭС"):
+    1) Площадь поверхности залива:   S = L * W
+    2) Энергия за полный приливный цикл:
+        E_cycle = rho * g * S * H^2 / 4
+    3) Средняя теоретическая мощность:
+        P_theor = E_cycle / T = rho * g * S * H^2 / (4 * T)
+    4) Реальная мощность:
+        P_real = eta * P_theor
+'''
+
+
+def bay_surface_area(length: float, width: float) -> float:
+    """Площадь поверхности залива S = L * W, м²."""
+    return length * width
+
+
+def cycle_energy(rho: float, g: float, S: float, H: float) -> float:
+    """Максимальная теоретическая энергия за полный приливный цикл, Дж:
+        E_cycle = rho * g * S * H^2 / 4
+    """
+    return rho * g * S * H ** 2 / 4.0
+
+
+def theoretical_power(rho: float, g: float, S: float, H: float, T_seconds: float) -> float:
+    """Средняя теоретическая мощность потока, Вт:
+        P_theor = rho * g * S * H^2 / (4 * T)
+    T_seconds — период прилива в секундах.
+    """
+    return rho * g * S * H ** 2 / (4.0 * T_seconds)
+
+
+def real_power(rho: float, g: float, S: float, H: float, T_seconds: float, eta: float) -> float:
+    """Реальная усреднённая мощность станции с учётом КПД турбин, Вт:
+        P_real = eta * P_theor
+    """
+    return eta * theoretical_power(rho, g, S, H, T_seconds)
+
+
+def average_flow_rate(S: float, H: float, T_seconds: float) -> float:
+    """Средний объёмный расход через пролив, м³/с.
+
+    За половину периода (прилив или отлив) через сечение пролива проходит объём,
+    равный S * H (уровень меняется на H по всей площади залива).
+    Среднее по модулю значение расхода:
+        Q_mean = 2 * S * H / T
+    (множитель 2, так как за период T происходит и прилив, и отлив, каждый длится T/2;
+    объём за половину цикла = S*H, поэтому Q = S*H / (T/2) = 2*S*H/T).
+    """
+    return 2.0 * S * H / T_seconds
+
+
 # =========================
-# Функции расчета
+# GUI
 # =========================
-
-def theoretical_power(rho, g, A, Q):
-    """
-    Теоретическая максимальная мощность:
-    P = (1/4) * rho * g * A * Q
-    """
-    return 0.25 * rho * g * A * Q
-
-
-def real_power(rho, g, A, Q, eta):
-    """
-    Реальная мощность с учетом КПД.
-    """
-    return eta * theoretical_power(rho, g, A, Q)
-
-
-def calculate_flow_rate(width, depth, tide_height, period_hours):
-    """
-    Расчет среднего расхода воды через пролив по его поперечному сечению и периоду прилива.
-    """
-    strait_area = width * depth  # площадь поперечного сечения пролива
-    period_seconds = period_hours * 3600
-    
-    # За полный цикл прилива-отлива уровень поднимается и опускается на tide_height.
-    # Мы считаем усредненный расход по поперечному сечению.
-    Q = strait_area * 4 * tide_height / period_seconds
-    return Q
-
-
-def required_flow_for_target_power(P_real_target, rho, g, A, eta):
-    """
-    Находит расход Q, необходимый для получения заданной реальной мощности
-    при известном КПД и приливной амплитуде.
-    """
-    P_theoretical_target = P_real_target / eta
-    Q_required = 4 * P_theoretical_target / (rho * g * A)
-    return Q_required, P_theoretical_target
-
-
 class TidalPowerPlantApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Приливная электростанция - Калькулятор")
-        self.root.geometry("900x700")
-        
-        # Параметры пролива
-        self.strait_length = 500.0
-        self.strait_width = 200.0
-        self.strait_depth = 15.0
-        
-        # Остальные параметры
-        self.tide_height = 5.0
-        self.period_hours = 12 + 25/60
-        self.efficiency = 0.40
-        self.target_power_mw = 22.5
-        
+        self.root.title("Приливная электростанция - Калькулятор (исправленная версия)")
+        self.root.geometry("980x720")
+
+        # Параметры пролива (горловины)
+        self.strait_length = 500.0   # длина пролива L_s, м
+        self.strait_width = 200.0    # ширина пролива W_s, м
+        self.strait_depth = 15.0     # средняя глубина пролива D, м
+
+        # Параметры залива (бассейна).
+        # В условии задачи площадь залива не задана явно, но из ожидаемого
+        # результата (≈22.5 МВт) обратным ходом получается S_bay ≈ 40.8 км².
+        # Это согласуется с типичными размерами заливов, соединённых с морем
+        # узкой горловиной (~6.4 × 6.4 км).
+        self.bay_length = 6400.0     # длина залива L, м
+        self.bay_width = 6400.0      # ширина залива W, м
+
+        # Параметры прилива
+        self.tide_height = 5.0                  # высота прилива H, м
+        self.period_hours = 12 + 25.0 / 60.0    # период прилива T, ч
+        self.efficiency = 0.40                  # КПД гидротурбин
+        self.target_power_mw = 22.5             # ожидаемая мощность из презентации
+
         self.setup_ui()
-    
+
+    # ---------- UI ----------
     def setup_ui(self):
-        """Создание интерфейса"""
-        # Левая панель - входные данные
-        left_frame = ttk.LabelFrame(self.root, text="Параметры пролива и системы", padding=10)
+        left_frame = ttk.LabelFrame(self.root, text="Параметры пролива / залива и станции", padding=10)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Параметры пролива
-        strait_frame = ttk.LabelFrame(left_frame, text="Пролив", padding=10)
+
+        # Пролив
+        strait_frame = ttk.LabelFrame(left_frame, text="Пролив (горловина)", padding=10)
         strait_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(strait_frame, text="Длина (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.entry_length = ttk.Entry(strait_frame, width=15)
-        self.entry_length.insert(0, str(self.strait_length))
-        self.entry_length.grid(row=0, column=1, padx=5)
-        
-        ttk.Label(strait_frame, text="Ширина (м):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.entry_width = ttk.Entry(strait_frame, width=15)
-        self.entry_width.insert(0, str(self.strait_width))
-        self.entry_width.grid(row=1, column=1, padx=5)
-        
-        ttk.Label(strait_frame, text="Средняя глубина (м):").grid(row=2, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(strait_frame, text="Длина Lₛ (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.entry_strait_length = ttk.Entry(strait_frame, width=15)
+        self.entry_strait_length.insert(0, str(self.strait_length))
+        self.entry_strait_length.grid(row=0, column=1, padx=5)
+
+        ttk.Label(strait_frame, text="Ширина Wₛ (м):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.entry_strait_width = ttk.Entry(strait_frame, width=15)
+        self.entry_strait_width.insert(0, str(self.strait_width))
+        self.entry_strait_width.grid(row=1, column=1, padx=5)
+
+        ttk.Label(strait_frame, text="Средняя глубина D (м):").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.entry_depth = ttk.Entry(strait_frame, width=15)
         self.entry_depth.insert(0, str(self.strait_depth))
         self.entry_depth.grid(row=2, column=1, padx=5)
-        
-        # Параметры прилива
+
+        # Залив
+        bay_frame = ttk.LabelFrame(left_frame, text="Залив (бассейн)", padding=10)
+        bay_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(bay_frame, text="Длина залива L (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.entry_bay_length = ttk.Entry(bay_frame, width=15)
+        self.entry_bay_length.insert(0, str(self.bay_length))
+        self.entry_bay_length.grid(row=0, column=1, padx=5)
+
+        ttk.Label(bay_frame, text="Ширина залива W (м):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.entry_bay_width = ttk.Entry(bay_frame, width=15)
+        self.entry_bay_width.insert(0, str(self.bay_width))
+        self.entry_bay_width.grid(row=1, column=1, padx=5)
+
+        # Прилив
         tide_frame = ttk.LabelFrame(left_frame, text="Прилив", padding=10)
         tide_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(tide_frame, text="Высота прилива (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(tide_frame, text="Высота прилива H (м):").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.entry_tide = ttk.Entry(tide_frame, width=15)
         self.entry_tide.insert(0, str(self.tide_height))
         self.entry_tide.grid(row=0, column=1, padx=5)
-        
-        ttk.Label(tide_frame, text="Период прилива (ч):").grid(row=1, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(tide_frame, text="Период прилива T (ч):").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.entry_period = ttk.Entry(tide_frame, width=15)
         self.entry_period.insert(0, f"{self.period_hours:.4f}")
         self.entry_period.grid(row=1, column=1, padx=5)
-        
-        # Параметры станции
+
+        # Станция
         station_frame = ttk.LabelFrame(left_frame, text="Станция", padding=10)
         station_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(station_frame, text="Целевая мощность (МВт):").grid(row=0, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(station_frame, text="Ожидаемая мощность (МВт):").grid(row=0, column=0, sticky=tk.W, pady=5)
         self.entry_target_power = ttk.Entry(station_frame, width=15)
         self.entry_target_power.insert(0, str(self.target_power_mw))
         self.entry_target_power.grid(row=0, column=1, padx=5)
-        
-        ttk.Label(station_frame, text="КПД (0-1):").grid(row=1, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(station_frame, text="КПД η (0-1):").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.entry_efficiency = ttk.Entry(station_frame, width=15)
         self.entry_efficiency.insert(0, str(self.efficiency))
         self.entry_efficiency.grid(row=1, column=1, padx=5)
-        
-        # Кнопка расчета
+
+        # Кнопки
         button_frame = ttk.Frame(left_frame)
         button_frame.pack(fill=tk.X, pady=10)
-        
-        calc_button = ttk.Button(button_frame, text="Рассчитать", command=self.calculate)
-        calc_button.pack(side=tk.LEFT, padx=5)
-        
-        reset_button = ttk.Button(button_frame, text="Сбросить", command=self.reset_values)
-        reset_button.pack(side=tk.LEFT, padx=5)
-        
+
+        ttk.Button(button_frame, text="Рассчитать", command=self.calculate).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Сбросить", command=self.reset_values).pack(side=tk.LEFT, padx=5)
+
         # Результаты
         results_frame = ttk.LabelFrame(left_frame, text="Результаты", padding=10)
         results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        self.results_text = tk.Text(results_frame, height=15, width=40, state=tk.DISABLED)
+
+        self.results_text = tk.Text(results_frame, height=18, width=45, state=tk.DISABLED)
         self.results_text.pack(fill=tk.BOTH, expand=True)
-        
+
         # Правая панель - график
-        right_frame = ttk.LabelFrame(self.root, text="График мощности", padding=10)
+        right_frame = ttk.LabelFrame(self.root, text="Графики", padding=10)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
         self.canvas_frame = right_frame
-        
-        # Начальный расчет и построение графика
+
         self.calculate()
-    
+
+    # ---------- Calculations ----------
     def calculate(self):
-        """Выполнить расчет"""
         try:
-            # Чтение входных данных
-            length = float(self.entry_length.get())
-            width = float(self.entry_width.get())
+            strait_length = float(self.entry_strait_length.get())
+            strait_width = float(self.entry_strait_width.get())
             depth = float(self.entry_depth.get())
-            tide_height = float(self.entry_tide.get())
+            bay_length = float(self.entry_bay_length.get())
+            bay_width = float(self.entry_bay_width.get())
+            H = float(self.entry_tide.get())
             period_hours = float(self.entry_period.get())
             target_power_mw = float(self.entry_target_power.get())
-            efficiency = float(self.entry_efficiency.get())
-            
-            # Валидация
-            if length <= 0 or width <= 0 or depth <= 0 or tide_height <= 0 or period_hours <= 0 or not (0 < efficiency <= 1) or target_power_mw <= 0:
-                messagebox.showerror("Ошибка", "Все параметры должны быть положительными числами!\nКПД должен быть между 0 и 1.")
+            eta = float(self.entry_efficiency.get())
+
+            if (strait_length <= 0 or strait_width <= 0 or depth <= 0
+                    or bay_length <= 0 or bay_width <= 0 or H <= 0
+                    or period_hours <= 0 or not (0 < eta <= 1) or target_power_mw <= 0):
+                messagebox.showerror(
+                    "Ошибка",
+                    "Все параметры должны быть положительными числами!\nКПД должен быть в (0; 1].",
+                )
                 return
-            
-            # Расчет расхода через поперечное сечение пролива
-            Q_geom = calculate_flow_rate(width, depth, tide_height, period_hours)
-            P_geom_theor = theoretical_power(RHO, G, tide_height, Q_geom)
-            P_geom_real = real_power(RHO, G, tide_height, Q_geom, efficiency)
 
-            # Расчет необходимого расхода для заданной мощности
-            P_real_target = target_power_mw * 1e6
-            Q_required, P_theor_target = required_flow_for_target_power(P_real_target, RHO, G, tide_height, efficiency)
-            
+            # --- Основные величины ---
+            T_sec = period_hours * 3600.0                    # период в секундах
+            S = bay_surface_area(bay_length, bay_width)      # площадь залива, м²
+            E_cycle = cycle_energy(RHO, G, S, H)             # энергия за цикл, Дж
+            P_theor = theoretical_power(RHO, G, S, H, T_sec) # Вт
+            P_real = real_power(RHO, G, S, H, T_sec, eta)    # Вт
+            Q_mean = average_flow_rate(S, H, T_sec)          # средний расход, м³/с
+
+            # Средняя скорость потока в проливе, м/с:
+            U_mean = Q_mean / (strait_width * depth)
+
             results = f"""
-РЕЗУЛЬТАТЫ РАСЧЕТА
-{'='*60}
+РЕЗУЛЬТАТЫ РАСЧЁТА
+{'=' * 60}
 
-Параметры пролива:
-  Длина: {length:.2f} м
-  Ширина: {width:.2f} м
-  Глубина: {depth:.2f} м
-  Сечение: {width*depth:.2f} м²
+Параметры пролива (горловины):
+    Длина Lₛ: {strait_length:.2f} м
+    Ширина Wₛ: {strait_width:.2f} м
+    Глубина D: {depth:.2f} м
+    Сечение пролива Wₛ·D: {strait_width * depth:.2f} м²
+
+Параметры залива (бассейна):
+    Длина L: {bay_length:.2f} м
+    Ширина W: {bay_width:.2f} м
+    Площадь залива S = L·W: {S:.0f} м² = {S / 1e6:.2f} км²
 
 Параметры прилива:
-  Высота: {tide_height:.2f} м
-  Период: {period_hours:.4f} ч
+    Высота H: {H:.2f} м
+    Период T: {period_hours:.4f} ч = {T_sec:.0f} с
 
 Параметры станции:
-  Целевая мощность: {target_power_mw:.2f} МВт
-  КПД: {efficiency:.2f} ({efficiency*100:.1f}%)
+    КПД η: {eta:.2f} ({eta * 100:.1f}%)
+    Ожидаемая мощность: {target_power_mw:.2f} МВт
 
-{'='*60}
-Расчеты по геометрии пролива:
-  Расход Q: {Q_geom:.2f} м³/с
-  Теоретическая мощность: {P_geom_theor/1e6:.3f} МВт
-  Реальная мощность: {P_geom_real/1e6:.3f} МВт
+{'=' * 60}
+Промежуточные величины:
+    Энергия за цикл E_cycle = ρgSH²/4 = {E_cycle:.3e} Дж
+    Средний расход через пролив Q = 2SH/T = {Q_mean:.2f} м³/с
+    Средняя скорость потока Ū = Q/(Wₛ·D) = {U_mean:.3f} м/с
 
-Расчеты для цели {target_power_mw:.2f} МВт:
-  Необходимый расход Q: {Q_required:.2f} м³/с
-  Теоретическая мощность при этом расходе: {P_theor_target/1e6:.3f} МВт
+Мощность:
+    Теоретическая P_theor = ρgSH²/(4T) = {P_theor / 1e6:.3f} МВт
+    Реальная      P_real  = η·P_theor  = {P_real / 1e6:.3f} МВт
+
+Сравнение с ожидаемым (из презентации):
+    P_real ≈ {P_real / 1e6:.2f} МВт  vs.  target ≈ {target_power_mw:.2f} МВт
 """
-            
             self.results_text.config(state=tk.NORMAL)
             self.results_text.delete(1.0, tk.END)
             self.results_text.insert(1.0, results)
             self.results_text.config(state=tk.DISABLED)
-            
-            # Построение графика
-            self.plot_graph(RHO, G, tide_height, efficiency, Q_required)
-            
+
+            self.plot_graphs(bay_length, bay_width, H, T_sec, eta)
+
         except ValueError:
             messagebox.showerror("Ошибка ввода", "Пожалуйста, введите корректные числовые значения")
-    
-    def plot_graph(self, rho, g, A, eta, Q_required=None):
-        """Построение графика зависимости мощности от расхода"""
-        # Очистка предыдущего графика
+
+    def plot_graphs(self, bay_length, bay_width, H, T_sec, eta):
         for widget in self.canvas_frame.winfo_children():
             widget.destroy()
-        
-        fig = Figure(figsize=(5, 4), dpi=100)
-        ax = fig.add_subplot(111)
-        
-        Q_values = np.linspace(0, 7000, 300)
-        P_theor_values = theoretical_power(rho, g, A, Q_values) / 1e6
-        P_real_values = real_power(rho, g, A, Q_values, eta) / 1e6
-        
-        ax.plot(Q_values, P_theor_values, label="Теоретическая", linewidth=2)
-        ax.plot(Q_values, P_real_values, label="Реальная", linewidth=2)
-        
-        if Q_required is not None:
-            ax.axvline(Q_required, color='red', linestyle='--', label=f'Q для {Q_required:.0f} м³/с')
-        
-        ax.set_title(f"Мощность при высоте прилива {A} м")
-        ax.set_xlabel("Расход Q, м³/с")
-        ax.set_ylabel("Мощность, МВт")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
+
+        fig = Figure(figsize=(6, 7), dpi=100)
+
+        # График 1: уровень воды в заливе во времени (синусоида амплитудой H/2)
+        ax1 = fig.add_subplot(211)
+        t = np.linspace(0, 2 * T_sec, 500)
+        level = (H / 2.0) * np.sin(2 * np.pi * t / T_sec)
+        ax1.plot(t / 3600.0, level, color='steelblue', linewidth=2)
+        ax1.set_title("Изменение уровня воды в заливе")
+        ax1.set_xlabel("Время, ч")
+        ax1.set_ylabel("Отклонение уровня, м")
+        ax1.grid(True, alpha=0.3)
+        ax1.axhline(0, color='gray', linewidth=0.5)
+
+        # График 2: мгновенная мощность станции
+        ax2 = fig.add_subplot(212)
+        S = bay_length * bay_width
+        # dη/dt = (H/2) * (2π/T) * cos(2πt/T)
+        deta_dt = (H / 2.0) * (2 * np.pi / T_sec) * np.cos(2 * np.pi * t / T_sec)
+        # Мгновенная мощность |ρ g S η (dη/dt)|, затем умножаем на КПД
+        instant_P = np.abs(RHO * G * S * level * deta_dt) * eta
+        ax2.plot(t / 3600.0, instant_P / 1e6, color='darkorange', linewidth=2, label='Мгновенная мощность')
+        P_avg = real_power(RHO, G, S, H, T_sec, eta) / 1e6
+        ax2.axhline(P_avg, color='red', linestyle='--', linewidth=1.5,
+                    label=f'Средняя ~ {P_avg:.2f} МВт')
+        ax2.set_title("Мгновенная реальная мощность станции")
+        ax2.set_xlabel("Время, ч")
+        ax2.set_ylabel("P, МВт")
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+
         fig.tight_layout()
-        
+
         canvas = FigureCanvasTkAgg(fig, master=self.canvas_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-    
-    def reset_values(self):
-        """Сброс значений по умолчанию"""
-        self.entry_length.delete(0, tk.END)
-        self.entry_length.insert(0, str(self.strait_length))
 
-        self.entry_width.delete(0, tk.END)
-        self.entry_width.insert(0, str(self.strait_width))
-        
-        self.entry_depth.delete(0, tk.END)
-        self.entry_depth.insert(0, str(self.strait_depth))
-        
-        self.entry_tide.delete(0, tk.END)
-        self.entry_tide.insert(0, str(self.tide_height))
-        
-        self.entry_period.delete(0, tk.END)
-        self.entry_period.insert(0, f"{self.period_hours:.4f}")
-        
-        self.entry_target_power.delete(0, tk.END)
-        self.entry_target_power.insert(0, str(self.target_power_mw))
-        
-        self.entry_efficiency.delete(0, tk.END)
-        self.entry_efficiency.insert(0, str(self.efficiency))
-        
+    # ---------- Reset ----------
+    def reset_values(self):
+        for entry, value in (
+            (self.entry_strait_length, str(self.strait_length)),
+            (self.entry_strait_width, str(self.strait_width)),
+            (self.entry_depth, str(self.strait_depth)),
+            (self.entry_bay_length, str(self.bay_length)),
+            (self.entry_bay_width, str(self.bay_width)),
+            (self.entry_tide, str(self.tide_height)),
+            (self.entry_period, f"{self.period_hours:.4f}"),
+            (self.entry_target_power, str(self.target_power_mw)),
+            (self.entry_efficiency, str(self.efficiency)),
+        ):
+            entry.delete(0, tk.END)
+            entry.insert(0, value)
         self.calculate()
 
 
 def main():
     root = tk.Tk()
-    app = TidalPowerPlantApp(root)
+    TidalPowerPlantApp(root)
     root.mainloop()
 
 
